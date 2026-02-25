@@ -1,0 +1,29 @@
+# ── Dataset (auto-downloaded by create_project_folders.py) ──────────────────
+Images/Images/*
+!Images/Images/.gitkeep
+Images/captions.txt
+Images/cleaned_captions.txt
+Images/flickr30k_downloaded.txt
+
+# ── Saved model weights (generated locally after training) ──────────────────
+saved_models/*
+!saved_models/.gitkeep
+
+# ── Python virtual environment ───────────────────────────────────────────────
+env/
+venv/
+.venv/
+
+# ── Python bytecode & caches ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── macOS metadata ────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Environment variables (secrets) ──────────────────────────────────────────
+.env
+
+# ── Jupyter checkpoints ───────────────────────────────────────────────────────
+.ipynb_checkpoints/
