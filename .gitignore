@@ -30,3 +30,6 @@ __pycache__/
 
 # ── Claude Code internal folder ───────────────────────────────────────────────
 .claude/
+
+# ── Log files (generated at runtime) ─────────────────────────────────────────
+logs/

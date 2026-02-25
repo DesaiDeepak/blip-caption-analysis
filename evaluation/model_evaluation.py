@@ -4,7 +4,9 @@ from torch.utils.data import DataLoader
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from PIL import Image
 from data.dataset import collate_fn
+from utils.logger import get_logger
 
+logger=get_logger("evaluation")
 
 def preprocess_images_and_captions(images_folder, captions_file, processor):
     """
@@ -34,7 +36,7 @@ def preprocess_images_and_captions(images_folder, captions_file, processor):
                         "attention_mask": inputs["attention_mask"].squeeze(0),
                     })
                 else:
-                    print(f"Warning: Image {image_name} not found in {images_folder}.")
+                    logger.warning(f"Image {image_name} not found in {images_folder}.")
     return data
 
 def evaluate_model(model, processor, images_folder, captions_file, device, batch_size=4):
@@ -49,7 +51,7 @@ def evaluate_model(model, processor, images_folder, captions_file, device, batch
         device: The device (CPU or GPU) for evaluation.
         batch_size: Number of samples per batch for evaluation.
     """
-    print("\n--- Evaluating Model ---")
+    logger.info("Starting model evaluation...")
 
     # Preprocess the images and captions
     data = preprocess_images_and_captions(images_folder, captions_file, processor)
@@ -89,5 +91,5 @@ def evaluate_model(model, processor, images_folder, captions_file, device, batch
     avg_loss = total_loss / len(test_loader)
     avg_bleu = sum(bleu_scores) / len(bleu_scores)
 
-    print(f"Test Set Loss: {avg_loss:.4f}")
-    print(f"Average BLEU Score: {avg_bleu:.4f}")
+    logger.info(f"Test Set Loss: {avg_loss:.4f}")
+    logger.info(f"Average BLEU Score: {avg_bleu:.4f}")

@@ -5,6 +5,9 @@ from transformers import BlipProcessor, BlipForConditionalGeneration
 from data.dataset import FlickrDataset, collate_fn
 from torch.cuda.amp import GradScaler, autocast
 from dotenv import load_dotenv
+from utils.logger import get_logger
+
+logger=get_logger("training")
 
 load_dotenv()
 
@@ -21,10 +24,10 @@ def check_trained_model(save_dir):
         bool: True if the model exists, False otherwise.
     """
     if os.path.exists(save_dir):
-        print(f"Trained model found at: {save_dir}")
+        logger.info(f"Trained model found at: {save_dir}")
         return True
     else:
-        print("No trained model found. Proceeding with training...")
+        logger.info("No trained model found. Proceeding with training...")
         return False
 
 
@@ -57,7 +60,7 @@ def train_model(
     if hf_token is None:
         hf_token = os.environ.get("HF_TOKEN")
 
-    print("Loading pre-trained BLIP processor and model...")
+    logger.info("Loading pre-trained BLIP processor and model...")
     processor = BlipProcessor.from_pretrained(
         "Salesforce/blip-image-captioning-large", token=hf_token
     )
@@ -66,11 +69,11 @@ def train_model(
     )
 
     # Load the dataset and limit to the first 6000 samples
-    print("Loading dataset...")
+    logger.info("Loading dataset...")
     full_dataset = FlickrDataset(captions_file, images_folder, processor)
     dataset = Subset(full_dataset, range(min(len(full_dataset), 6000)))
 
-    print(f"Using {len(dataset)} samples for training.")
+    logger.info(f"Using {len(dataset)} samples for training.")
 
     train_loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True
@@ -92,7 +95,7 @@ def train_model(
         total_loss = 0
         images_processed = 0
 
-        print(f"Starting epoch {epoch + 1}/{epochs}...")
+        logger.info(f"Starting epoch {epoch + 1}/{epochs}...")
         for step, batch in enumerate(train_loader):
             pixel_values = batch["pixel_values"].to(device)
             input_ids = batch["input_ids"].to(device)
@@ -133,13 +136,13 @@ def train_model(
             total_loss += loss.item()
 
             if images_processed % log_interval == 0:
-                print(f"Processed {images_processed} images out of {len(train_loader.dataset)}.")
+                logger.info(f"Processed {images_processed}/{len(train_loader.dataset)} images.")
 
         avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch + 1}/{epochs} completed. Average Loss: {avg_loss:.4f}")
+        logger.info(f"Epoch {epoch + 1}/{epochs} completed. Average Loss: {avg_loss:.4f}")
 
-    print(f"Saving the fine-tuned model to {save_dir}...")
+    logger.info(f"Saving the fine-tuned model to {save_dir}...")
     os.makedirs(save_dir, exist_ok=True)
     model.save_pretrained(save_dir)
     processor.save_pretrained(save_dir)
-    print(f"Model saved successfully at {save_dir}")
+    logger.info(f"Model saved successfully at {save_dir}")
