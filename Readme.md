@@ -1,85 +1,118 @@
+# Automated Caption Generation using BLIP Model
 
-This is the procedure of the model for training and deploying the model inyto the local environment
+This project fine-tunes the [BLIP (Bootstrapping Language-Image Pre-training)](https://huggingface.co/Salesforce/blip-image-captioning-large) model on the Flickr8k dataset to automatically generate captions for images. A Streamlit web app is included for local deployment.
 
-# Download the dataset
+---
 
-https://www.kaggle.com/datasets/ming666/flicker8k-dataset
+## Project Structure
 
-
-# Run create_project_folders.py file
-
-that will create the needed achitecture for the project
-Please place the files in the necessary stryure for the project running
- 
- Imagecaptioning/
+```
+TEAM5_AUTOMATED_CAPTION_GENERATION_USING_BLIP_MODEL/
 │
-├── Images/                               # Data folder for raw and processed data
-│       ├── image1.jpg
-│       ├── image2.jpg
-│       └── ...
+├── Images/                        # Dataset folder (downloaded via script)
+│   ├── Images/                    # Raw image files
+│   ├── captions.txt               # Original captions file
+│   └── cleaned_captions.txt       # Generated after data cleaning
 │
-├── saved_models/                             # Folder for language models
-│   ├── fine_tuned_meta_llama/          
-│   ├── pretrained_miniLM/              
-│   └── model_config.json               # Configuration for fine-tuned models
+├── cleaning/                      # Data cleaning scripts
+│   └── data_cleaning.py
 │
+├── training/                      # Model training scripts
+│   └── model_training.py
 │
-├── cleaning/                            # cleaning scripts for specific tasks
-│   ├── dataset.py                         # Data preprocessing script
+├── evaluation/                    # Model evaluation scripts
+│   └── model_evaluation.py
 │
-├── data/                          # Jupyter notebooks for experiments
-│   ├── data_exploration.ipynb          # Notebook for initial data exploration
+├── saved_models/                  # Fine-tuned model saved here after training
+│   └── fine_tuned_blip/
 │
-├── training/                              #  tests for different modules
-│   ├── model_training.py           # Unit tests for preprocessing
-│
-├── evaluation/                               # model evaluation and score
-├── model_evaluation.py                       # mdoel evaluation python file
-│
-├── requirements.txt                    # Python dependencies
-├── main.py                            # Script for setting up the project
-├── README.md                           # Project overview and instructions
-└── app.py                         # stramlit app   file
-├── captions.txt                    # Captions file with image descriptions
-└── cleaned-captions.py                         # genrated after data cleaneing for clearing the anamolies
+├── app.py                         # Streamlit web app
+├── main.py                        # Main pipeline (clean → train → evaluate)
+├── create_project_folders.py      # Sets up folders and downloads dataset
+├── requirements.txt               # Python dependencies
+└── .env                           # HuggingFace token (not committed)
+```
 
- 
- 
-Step1: Model Training
+---
 
-Running Steps:
+## Setup Instructions
 
-# create a virtual environment
+### Step 1 — Download the Dataset
 
+Download the Flickr8k dataset from Kaggle:
+[https://www.kaggle.com/datasets/ming666/flicker8k-dataset](https://www.kaggle.com/datasets/ming666/flicker8k-dataset)
 
-# command to create the virtual env
-conda create -n venv python=3.10
+Or run the setup script which handles it automatically:
+```bash
+python create_project_folders.py
+```
 
-note: venv --> my virtual env name
-python=31.0 --->python version
+---
 
-replace the version and virtual envoironment name if needed  
+### Step 2 — Create a Virtual Environment
 
-# command to actiavte the virtual env
-conda activate 
+```bash
+conda create -n blip_env python=3.10
+conda activate blip_env
+```
 
+---
 
-# Step2: Install all the required libraries
+### Step 3 — Install Dependencies
 
-# command :   pip install -r requirements.txt
+```bash
+pip install -r requirements.txt
+```
 
-# step3 : Model Training and data cleaning
+---
 
-# command: python main.py
+### Step 4 — Set Up Environment Variables
 
-or run main.py it will call the folder structure of the file and train the model and save the model into the space
+Create a `.env` file in the root folder:
+```
+HF_TOKEN=your_huggingface_token_here
+```
 
+Get your token from [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
 
-# step4 : call the save model or deploy into local environment
+---
 
+### Step 5 — Train the Model
 
-command: streamlit run app.py
+```bash
+python main.py
+```
 
+This will:
+- Clean the captions file
+- Fine-tune the BLIP model on Flickr8k
+- Save the model to `saved_models/fine_tuned_blip/`
+- Run evaluation (BLEU score)
 
+---
 
+### Step 6 — Run the Web App
 
+```bash
+streamlit run app.py
+```
+
+Open your browser at `http://localhost:8501` to upload an image and generate captions.
+
+---
+
+## Requirements
+
+- Python 3.10
+- PyTorch 2.0.1
+- Transformers 4.34.0
+- Streamlit 1.21.0
+- NLTK, Pillow, NumPy
+
+See [requirements.txt](requirements.txt) for the full list.
+
+---
+
+## Team
+
+Team 5 — Automated Caption Generation using BLIP Model

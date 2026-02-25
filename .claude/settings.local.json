@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(/Users/santhoshreddy/Desktop/RAND/TEAM5_AUTOMATED_CAPTION_GENERATION_USING_BLIP_MODEL/env/bin/pip install python-dotenv==1.0.0 -q)"
-    ]
-  }
-}
