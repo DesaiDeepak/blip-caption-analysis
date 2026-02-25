@@ -8,7 +8,7 @@ from utils.logger import get_logger
 
 logger=get_logger("evaluation")
 
-def preprocess_images_and_captions(images_folder, captions_file, processor):
+def preprocess_images_and_captions(images_folder, captions_file, processor, max_samples=1000):
     """
     Preprocess the images and captions directly without using a dataset class.
 
@@ -16,6 +16,7 @@ def preprocess_images_and_captions(images_folder, captions_file, processor):
         images_folder (str): Path to the folder containing images.
         captions_file (str): Path to the captions file.
         processor: The BLIP processor for image-caption processing.
+        max_samples (int): Maximum number of samples to load into memory.
 
     Returns:
         List[Dict]: A list of processed samples (image tensors and captions).
@@ -23,6 +24,8 @@ def preprocess_images_and_captions(images_folder, captions_file, processor):
     data = []
     with open(captions_file, "r") as file:
         for line in file:
+            if len(data) >= max_samples:
+                break
             parts = line.strip().split(",", 1)
             if len(parts) == 2:
                 image_name, caption = parts
@@ -39,7 +42,7 @@ def preprocess_images_and_captions(images_folder, captions_file, processor):
                     logger.warning(f"Image {image_name} not found in {images_folder}.")
     return data
 
-def evaluate_model(model, processor, images_folder, captions_file, device, batch_size=4):
+def evaluate_model(model, processor, images_folder, captions_file, device, batch_size=4, max_samples=1000):
     """
     Evaluate the fine-tuned model on the test set and calculate BLEU scores.
 
@@ -54,7 +57,7 @@ def evaluate_model(model, processor, images_folder, captions_file, device, batch
     logger.info("Starting model evaluation...")
 
     # Preprocess the images and captions
-    data = preprocess_images_and_captions(images_folder, captions_file, processor)
+    data = preprocess_images_and_captions(images_folder, captions_file, processor, max_samples=max_samples)
     test_loader = DataLoader(data, batch_size=batch_size, collate_fn=collate_fn, shuffle=False)
 
     model.eval()

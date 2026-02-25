@@ -27,6 +27,7 @@ def main():
 
     training = config["training"]
     model_cfg = config["model"]
+    evaluation = config["evaluation"]
 
     # Step 0: Ensure dataset is present, download if missing
     logger.info("\n--- Step 0: Checking Dataset ---")
@@ -54,6 +55,8 @@ def main():
             log_interval=training["log_interval"],
             save_dir=model_save_dir,
             hf_token=os.environ.get("HF_TOKEN"),
+            model_name=model_cfg["base_model"],
+            max_samples=training["max_samples"],
         )
     else:
         logger.info("Model already trained. Proceeding to evaluation.")
@@ -63,8 +66,8 @@ def main():
     processor = BlipProcessor.from_pretrained(model_cfg["base_model"])
     model = BlipForConditionalGeneration.from_pretrained(model_save_dir)
 
-    # Use MPS if available, else fall back to CPU
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    # MPS causes bus errors with BLIP inference - use CPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     # Step 4: Running Evaluation
@@ -75,6 +78,8 @@ def main():
         images_folder=images_folder,
         captions_file=cleaned_captions_file,
         device=device,
+        batch_size=evaluation["batch_size"],
+        max_samples=evaluation["max_samples"],
     )
 
 if __name__ == "__main__":

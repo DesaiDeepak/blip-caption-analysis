@@ -1,4 +1,6 @@
 import os
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 import torch
 from torch.utils.data import DataLoader, Subset
 from transformers import BlipProcessor, BlipForConditionalGeneration
@@ -42,6 +44,8 @@ def train_model(
     log_interval=100,
     save_dir="saved_models/fine_tuned_blip",
     hf_token=None,
+    model_name="Salesforce/blip-image-captioning-base",
+    max_samples=1000,
 ):
     """
     Trains the BLIP model on a subset of the dataset.
@@ -60,32 +64,25 @@ def train_model(
     if hf_token is None:
         hf_token = os.environ.get("HF_TOKEN")
 
-    logger.info("Loading pre-trained BLIP processor and model...")
-    processor = BlipProcessor.from_pretrained(
-        "Salesforce/blip-image-captioning-large", token=hf_token
-    )
-    model = BlipForConditionalGeneration.from_pretrained(
-        "Salesforce/blip-image-captioning-large", token=hf_token
-    )
+    logger.info(f"Loading pre-trained BLIP processor and model: {model_name}...")
+    processor = BlipProcessor.from_pretrained(model_name, token=hf_token)
+    model = BlipForConditionalGeneration.from_pretrained(model_name, token=hf_token)
 
     # Load the dataset and limit to the first 6000 samples
     logger.info("Loading dataset...")
     full_dataset = FlickrDataset(captions_file, images_folder, processor)
-    dataset = Subset(full_dataset, range(min(len(full_dataset), 6000)))
+    dataset = Subset(full_dataset, range(min(len(full_dataset), max_samples)))
 
     logger.info(f"Using {len(dataset)} samples for training.")
 
     train_loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True
+        dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=False
     )
 
     # Set up the optimizer and device
+    # MPS (Apple Silicon) causes bus errors during backward pass with BLIP - use CPU
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else
-        "mps" if torch.backends.mps.is_available() else
-        "cpu"
-    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     scaler = GradScaler() if torch.cuda.is_available() else None

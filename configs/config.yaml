@@ -6,11 +6,11 @@ paths:
   logs_dir: "logs"
 
 model:
-  base_model: "Salesforce/blip-image-captioning-large"
+  base_model: "Salesforce/blip-image-captioning-base"
 
 training:
   epochs: 1
-  batch_size: 4
+  batch_size: 2
   learning_rate: 0.00005
   gradient_accumulation_steps: 4
   log_interval: 100
@@ -18,3 +18,4 @@ training:
 
 evaluation:
   batch_size: 4
+  max_samples: 1000
