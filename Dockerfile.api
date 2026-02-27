@@ -1,0 +1,33 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+#install uv
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+#Copy dependency files first (layer caching)
+COPY pyproject.toml uv.lock ./
+
+#install dependencies
+
+RUN uv sync --frozen --no-dev
+
+
+#Copy source code
+
+COPY api/ ./api/
+COPY training/ ./training/
+COPY data/ ./data/
+COPY cleaning/ ./cleaning/
+COPY utils/ ./utils/
+COPY configs/ ./configs/
+COPY saved_models/ ./saved_models/
+
+#Expose Port
+
+EXPOSE 8000
+
+#start the API
+
+CMD ["uv","run","uvicorn","api.inference:app","--host","0.0.0.0","--port","8000"]
