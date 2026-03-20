@@ -43,7 +43,7 @@ def train_model(
     lr=5e-5,
     gradient_accumulation_steps=4,
     log_interval=100,
-    save_dir="saved_models/fine_tuned_blip",
+    save_dir=None,
     hf_token=None,
     model_name="Salesforce/blip-image-captioning-base",
     max_samples=1000,
@@ -61,8 +61,13 @@ def train_model(
         gradient_accumulation_steps (int): Number of steps for gradient accumulation.
         log_interval (int): Log progress after this many images.
         save_dir (str): Directory to save the fine-tuned model.
+                        Defaults to saved_models/<dataset_name>/.
         hf_token (str): Hugging Face token for downloading the base model.
+        dataset_name (str): "flickr8k" or "medical".
     """
+    # Default save directory based on dataset_name
+    if save_dir is None:
+        save_dir = os.path.join("saved_models", dataset_name)
     if hf_token is None:
         hf_token = os.environ.get("HF_TOKEN")
 
