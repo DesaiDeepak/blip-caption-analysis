@@ -53,17 +53,35 @@ device = None
 def load_model():
     global processor, model, device
 
+    # If model/processor are already set (e.g. by tests injecting mocks), skip loading.
+    if model is not None and processor is not None:
+        logger.info("Model already loaded (or mocked) — skipping startup load.")
+        if device is None:
+            device = torch.device("cpu")
+        return
+
     MODEL_DIR = "saved_models/fine_tuned_blip"
+    FALLBACK_MODEL = "Salesforce/blip-image-captioning-base"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Loading model from {MODEL_DIR} on {device}...")
 
-    processor = BlipProcessor.from_pretrained(MODEL_DIR)
-    model = BlipForConditionalGeneration.from_pretrained(MODEL_DIR)
+    # Use local fine-tuned model if it exists, otherwise download the public base model
+    if os.path.isdir(MODEL_DIR) and os.path.isfile(os.path.join(MODEL_DIR, "config.json")):
+        source = MODEL_DIR
+        logger.info(f"Loading fine-tuned model from {source} on {device}...")
+    else:
+        source = FALLBACK_MODEL
+        logger.warning(
+            f"Local model not found at '{MODEL_DIR}'. "
+            f"Falling back to public base model: {FALLBACK_MODEL}"
+        )
+
+    processor = BlipProcessor.from_pretrained(source)
+    model = BlipForConditionalGeneration.from_pretrained(source)
     model.to(device)
     model.eval()
 
-    logger.info("Model loaded and ready.")
+    logger.info(f"Model loaded from '{source}' and ready.")
 
 
 @app.get("/health")
@@ -93,8 +111,12 @@ async def generate_caption(request: Request, file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read image file.")
 
-    # Run inference
-    inputs = processor(images=image, return_tensors="pt").to(device)
+    # Run inference — move each tensor to the target device
+    inputs = processor(images=image, return_tensors="pt")
+    if isinstance(inputs, dict):
+        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
+    else:
+        inputs = inputs.to(device)
     with torch.no_grad():
         output = model.generate(**inputs)
     caption = processor.decode(output[0], skip_special_tokens=True)
