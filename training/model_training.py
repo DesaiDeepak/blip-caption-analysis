@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from data.dataset import FlickrDataset, collate_fn
+from data.medical_dataset import MedicalDataset
 from torch.cuda.amp import GradScaler, autocast
 from dotenv import load_dotenv
 from utils.logger import get_logger
@@ -46,6 +47,7 @@ def train_model(
     hf_token=None,
     model_name="Salesforce/blip-image-captioning-base",
     max_samples=1000,
+    dataset_name="flickr8k",
 ):
     """
     Trains the BLIP model on a subset of the dataset.
@@ -70,7 +72,8 @@ def train_model(
 
     # Load the dataset and limit to the first 6000 samples
     logger.info("Loading dataset...")
-    full_dataset = FlickrDataset(captions_file, images_folder, processor)
+    DatasetClass = MedicalDataset if dataset_name == "medical" else FlickrDataset
+    full_dataset = DatasetClass(captions_file, images_folder, processor)
     dataset = Subset(full_dataset, range(min(len(full_dataset), max_samples)))
 
     logger.info(f"Using {len(dataset)} samples for training.")
