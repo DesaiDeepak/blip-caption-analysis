@@ -2,9 +2,6 @@ import os
 import requests
 import streamlit as st
 from dotenv import load_dotenv
-from create_project_folders import ensure_dataset
-from cleaning.data_cleaning import clean_captions_file
-from training.model_training import train_model
 
 load_dotenv()
 
@@ -25,34 +22,16 @@ def check_api_healthy():
         return False
 
 
-# If no trained model exists, run the full pipeline before loading
+# If no trained model exists, show an info banner (the API server
+# already falls back to the public base model automatically).
 if not os.path.exists(os.path.join(MODEL_DIR, "config.json")):
-    st.title("BLIP Image Captioning App")
-    st.warning("No trained model found. Running the training pipeline automatically...")
-
-    st.write("**Step 1:** Checking dataset...")
-    with st.spinner("Downloading dataset if needed..."):
-        ensure_dataset(images_folder=IMAGES_FOLDER, captions_file=CAPTIONS_FILE)
-    st.success("Dataset ready.")
-
-    st.write("**Step 2:** Cleaning captions...")
-    with st.spinner("Cleaning captions..."):
-        clean_captions_file(
-            captions_file=CAPTIONS_FILE,
-            cleaned_captions_file=CLEANED_CAPTIONS_FILE,
-            images_folder=IMAGES_FOLDER,
-        )
-    st.success("Captions cleaned.")
-
-    st.write("**Step 3:** Training model — this will take a while...")
-    with st.spinner("Training in progress, please wait..."):
-        train_model(
-            captions_file=CLEANED_CAPTIONS_FILE,
-            images_folder=IMAGES_FOLDER,
-            hf_token=os.environ.get("HF_TOKEN"),
-        )
-    st.success("Model trained and saved! Reloading app...")
-    st.rerun()
+    st.info(
+        "ℹ️ No fine-tuned model found at `saved_models/fine_tuned_blip/`. "
+        "The API is using the public **Salesforce/blip-image-captioning-base** model. "
+        "To train your own, run:  \n"
+        "`python -c \"from training.model_training import train_model; "
+        "train_model('./Images/cleaned_captions.txt', './Images/Images', epochs=5)\"`"
+    )
 
 
 # Title of the application
