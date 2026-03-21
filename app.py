@@ -2,6 +2,7 @@ import os
 import requests
 import streamlit as st
 from dotenv import load_dotenv
+from medical_alert import detect_medical_issue
 
 load_dotenv()
 
@@ -62,6 +63,22 @@ if uploaded_image is not None:
         caption = response.json()["caption"]
         st.subheader("Generated Caption:")
         st.write(caption)
+
+        # ── Medical Alerting Layer ────────────────────────────
+        st.markdown("---")
+        st.subheader("🩺 Medical Analysis")
+        status, explanation, confidence = detect_medical_issue(caption)
+
+        if status == "CRITICAL":
+            st.error(f"**Status: {status}**")
+        elif status == "WARNING":
+            st.warning(f"**Status: {status}**")
+        else:
+            st.success(f"**Status: {status}**")
+
+        st.write(explanation)
+        st.caption("Confidence")
+        st.progress(confidence)
     else:
         st.error(f"Error from API: {response.json().get('detail', 'Unknown error')}")
 
