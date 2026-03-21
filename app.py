@@ -73,6 +73,8 @@ if uploaded_image is not None:
             st.error(f"**Status: {status}**")
         elif status == "WARNING":
             st.warning(f"**Status: {status}**")
+        elif status == "REVIEW":
+            st.info(f"**Status: {status}**")
         else:
             st.success(f"**Status: {status}**")
 

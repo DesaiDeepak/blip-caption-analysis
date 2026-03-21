@@ -23,6 +23,13 @@ WARNING_KEYWORDS = [
     "enlarged", "abnormal", "displacement", "narrowing",
 ]
 
+MEDICAL_CONTEXT_KEYWORDS = [
+    "x-ray", "xray", "chest", "lungs", "lung", "scan", "radiograph",
+    "ct scan", "mri", "ultrasound", "mammogram", "rib", "spine",
+    "abdomen", "pelvis", "skull", "thorax", "diaphragm", "bone",
+    "skeletal", "radiology", "medical", "patient", "clinical",
+]
+
 NORMAL_HINTS = [
     "normal", "clear", "unremarkable", "no abnormality",
     "healthy", "no significant", "within normal",
@@ -36,7 +43,7 @@ def detect_medical_issue(caption: str):
     Returns
     -------
     status : str
-        One of ``"CRITICAL"``, ``"WARNING"``, or ``"NORMAL"``.
+        One of ``"CRITICAL"``, ``"WARNING"``, ``"REVIEW"``, or ``"NORMAL"``.
     explanation : str
         A short, human-readable summary.
     confidence : float
@@ -47,9 +54,8 @@ def detect_medical_issue(caption: str):
     # ── collect matched keywords ──────────────────────────────────
     crit_matches = [kw for kw in CRITICAL_KEYWORDS if kw in text]
     warn_matches = [kw for kw in WARNING_KEYWORDS if kw in text]
+    ctx_matches = [kw for kw in MEDICAL_CONTEXT_KEYWORDS if kw in text]
     norm_matches = [kw for kw in NORMAL_HINTS if kw in text]
-
-    total_medical = len(crit_matches) + len(warn_matches)
 
     # ── decide status ─────────────────────────────────────────────
     if crit_matches:
@@ -68,6 +74,15 @@ def detect_medical_issue(caption: str):
         )
         confidence = min(0.4 + 0.1 * len(warn_matches), 0.9)
 
+    elif ctx_matches:
+        status = "REVIEW"
+        explanation = (
+            f"🔍 Medical image detected (context: {', '.join(ctx_matches)}) "
+            "but no clear abnormality found in caption. "
+            "Manual review recommended."
+        )
+        confidence = min(0.3 + 0.1 * len(ctx_matches), 0.7)
+
     elif norm_matches:
         status = "NORMAL"
         explanation = "✅ Caption appears to describe a normal finding."
@@ -76,7 +91,7 @@ def detect_medical_issue(caption: str):
     else:
         status = "NORMAL"
         explanation = (
-            "ℹ️ No specific medical keywords detected in caption. "
+            "ℹ️ No medical indicators detected in caption. "
             "Treat as general image."
         )
         confidence = 0.3  # low confidence — caption may not be medical
