@@ -55,7 +55,7 @@ if uploaded_image is not None:
         response = requests.post(
             f"{API_URL}/caption",
             files={"file": (uploaded_image.name, uploaded_image.getvalue(), uploaded_image.type)},
-            headers={"X-API-KEY": API_KEY}
+            headers={"X-API-Key": API_KEY}
         )
 
     if response.status_code == 200:
