@@ -60,6 +60,15 @@ with tab_image:
             "`uvicorn api.inference:app --port 8000`"
         )
     else:
+        # ── Medical Image Mode toggle ─────────────────────────
+        medical_mode = st.checkbox(
+            "🩺 Medical Image Mode",
+            value=False,
+            help="Enable this for X-rays, CT scans, MRIs, etc. "
+            "Uses prompt-guided captioning to generate medically "
+            "relevant descriptions.",
+        )
+
         # File uploader widget for image input
         uploaded_image = st.file_uploader(
             "Choose an image", type=["jpg", "jpeg", "png", "bmp"]
@@ -68,6 +77,9 @@ with tab_image:
         if uploaded_image is not None:
             # Display the uploaded image
             st.image(uploaded_image, caption="Uploaded Image", use_column_width=True)
+
+            # Build request payload
+            prompt = "a medical image showing" if medical_mode else ""
 
             # Send image to FastAPI and get caption
             with st.spinner("Generating caption..."):
@@ -80,6 +92,7 @@ with tab_image:
                             uploaded_image.type,
                         )
                     },
+                    data={"text_prompt": prompt},
                     headers={"X-API-Key": API_KEY},
                 )
 
@@ -144,6 +157,12 @@ with tab_video:
             step=5,
             help="Hard cap on the number of frames to avoid overload.",
         )
+        video_medical_mode = st.checkbox(
+            "🩺 Medical Video Mode",
+            value=False,
+            help="Enable for medical videos (endoscopy, ultrasound, "
+            "surgical footage, etc.). Uses prompt-guided captioning.",
+        )
 
     with col_main:
         uploaded_video = st.file_uploader(
@@ -190,6 +209,7 @@ with tab_video:
                     fps=sample_fps,
                     max_frames=int(max_frames),
                     progress_callback=_update_progress,
+                    text_prompt="a medical image showing" if video_medical_mode else "",
                 )
 
                 progress_bar.progress(1.0, text="✅ Done!")

@@ -138,20 +138,35 @@ class VideoCaptioner:
 
     # ── Single-frame captioning ───────────────────────────────────
 
-    def caption_frame(self, frame_bgr: np.ndarray) -> str:
-        """Generate a BLIP caption for a single BGR (OpenCV) frame."""
+    def caption_frame(self, frame_bgr: np.ndarray, text_prompt: str = "") -> str:
+        """Generate a BLIP caption for a single BGR (OpenCV) frame.
+
+        Parameters
+        ----------
+        frame_bgr : np.ndarray
+            BGR frame from OpenCV.
+        text_prompt : str, optional
+            If provided, BLIP uses conditional (prompt-guided) generation.
+            E.g. ``"a medical image showing"`` for medical images.
+        """
         # OpenCV → PIL RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
 
-        inputs = self.processor(images=pil_image, return_tensors="pt")
+        if text_prompt.strip():
+            inputs = self.processor(
+                images=pil_image, text=text_prompt.strip(), return_tensors="pt"
+            )
+        else:
+            inputs = self.processor(images=pil_image, return_tensors="pt")
+
         inputs = {
             k: v.to(self._device) if hasattr(v, "to") else v
             for k, v in inputs.items()
         }
 
         with torch.no_grad():
-            output = self.model.generate(**inputs)
+            output = self.model.generate(**inputs, max_new_tokens=50)
 
         caption = self.processor.decode(output[0], skip_special_tokens=True)
         return caption.strip()
@@ -230,6 +245,7 @@ class VideoCaptioner:
         fps: float = 1.0,
         max_frames: int = 30,
         progress_callback=None,
+        text_prompt: str = "",
     ) -> dict:
         """
         Run the complete video-captioning pipeline.
@@ -245,6 +261,9 @@ class VideoCaptioner:
         progress_callback : callable, optional
             ``callback(current_frame: int, total_frames: int)``
             invoked after each frame is captioned.
+        text_prompt : str, optional
+            If provided, BLIP uses conditional (prompt-guided) generation.
+            E.g. ``"a medical image showing"`` for medical videos.
 
         Returns
         -------
@@ -271,7 +290,7 @@ class VideoCaptioner:
         frame_images: List[Image.Image] = []
 
         for i, frame in enumerate(frames):
-            caption = self.caption_frame(frame)
+            caption = self.caption_frame(frame, text_prompt=text_prompt)
             captions.append(caption)
 
             # Convert for display

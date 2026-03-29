@@ -2,7 +2,7 @@ import io
 import os
 import torch
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile, HTTPException, Security, Depends, Request
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Security, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,7 +91,11 @@ def health_check():
 
 @app.post("/caption", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
-async def generate_caption(request: Request, file: UploadFile = File(...)):
+async def generate_caption(
+    request: Request,
+    file: UploadFile = File(...),
+    text_prompt: str = Form(default=""),
+):
     if file.content_type not in ["image/jpeg", "image/png", "image/bmp"]:
         raise HTTPException(
             status_code=400,
@@ -111,15 +115,19 @@ async def generate_caption(request: Request, file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read image file.")
 
-    # Run inference — move each tensor to the target device
-    inputs = processor(images=image, return_tensors="pt")
+    # Run inference — conditional (prompted) or unconditional
+    if text_prompt.strip():
+        inputs = processor(images=image, text=text_prompt.strip(), return_tensors="pt")
+    else:
+        inputs = processor(images=image, return_tensors="pt")
+
     if isinstance(inputs, dict):
         inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
     else:
         inputs = inputs.to(device)
     with torch.no_grad():
-        output = model.generate(**inputs)
+        output = model.generate(**inputs, max_new_tokens=50)
     caption = processor.decode(output[0], skip_special_tokens=True)
 
-    logger.info(f"Caption generated: {caption}")
+    logger.info(f"Caption generated (prompt='{text_prompt}'): {caption}")
     return JSONResponse(content={"caption": caption})
