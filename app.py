@@ -163,6 +163,18 @@ with tab_video:
             help="Enable for medical videos (endoscopy, ultrasound, "
             "surgical footage, etc.). Uses prompt-guided captioning.",
         )
+        use_temporal_context = st.checkbox(
+            "🕐 Temporal Context Mode",
+            value=False,
+            help=(
+                "Improves caption coherence across frames:\n\n"
+                "**Option A** — each frame is captioned with awareness of "
+                "the previous 2 captions (prompt-based context).\n\n"
+                "**Option B** — final summary uses semantic deduplication "
+                "(SBERT) + T5 summarisation instead of simple joining.\n\n"
+                "⚠️ First run downloads ~100 MB of models."
+            ),
+        )
 
     with col_main:
         uploaded_video = st.file_uploader(
@@ -210,17 +222,28 @@ with tab_video:
                     max_frames=int(max_frames),
                     progress_callback=_update_progress,
                     text_prompt="a medical image showing" if video_medical_mode else "",
+                    use_temporal_context=use_temporal_context,
                 )
 
                 progress_bar.progress(1.0, text="✅ Done!")
 
                 # ── Stats ─────────────────────────────────────
-                st.info(
+                semantic_unique = result.get(
+                    "semantic_unique_captions", result["unique_captions"]
+                )
+                stats_msg = (
                     f"📊 Processed **{len(result['captions'])}** frames "
-                    f"({len(result['unique_captions'])} unique captions) "
-                    f"from a {result['total_video_frames']}-frame video "
+                    f"({len(result['unique_captions'])} exact-unique"
+                )
+                if use_temporal_context:
+                    stats_msg += (
+                        f", **{len(semantic_unique)} semantic-unique** after SBERT dedup"
+                    )
+                stats_msg += (
+                    f") from a {result['total_video_frames']}-frame video "
                     f"@ {result['video_fps']:.1f} FPS"
                 )
+                st.info(stats_msg)
 
                 # ── Aggregated caption ────────────────────────
                 st.markdown("---")

@@ -138,7 +138,13 @@ class VideoCaptioner:
 
     # ── Single-frame captioning ───────────────────────────────────
 
-    def caption_frame(self, frame_bgr: np.ndarray, text_prompt: str = "") -> str:
+    def caption_frame(
+        self,
+        frame_bgr: np.ndarray,
+        text_prompt: str = "",
+        previous_captions: Optional[List[str]] = None,
+        context_window: int = 2,
+    ) -> str:
         """Generate a BLIP caption for a single BGR (OpenCV) frame.
 
         Parameters
@@ -146,16 +152,36 @@ class VideoCaptioner:
         frame_bgr : np.ndarray
             BGR frame from OpenCV.
         text_prompt : str, optional
-            If provided, BLIP uses conditional (prompt-guided) generation.
-            E.g. ``"a medical image showing"`` for medical images.
+            Base prompt for conditional generation (e.g. medical mode).
+        previous_captions : list[str], optional
+            Last ``context_window`` captions from prior frames.
+            When provided, they are prepended as temporal context so BLIP
+            generates a caption that is consistent with what came before.
+            Example prompt sent to BLIP::
+                "Previously: a dog runs. a ball is thrown. Now:"
+        context_window : int
+            How many previous captions to include in the context prompt.
         """
         # OpenCV → PIL RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
 
-        if text_prompt.strip():
+        # ── Build the effective prompt ─────────────────────────────
+        # Option A: prepend previous captions as temporal context
+        if previous_captions:
+            recent = previous_captions[-context_window:]
+            context_str = " ".join(c.strip().rstrip(".") for c in recent)
+            if text_prompt.strip():
+                # medical mode + temporal context
+                effective_prompt = f"Previously: {context_str}. {text_prompt.strip()}"
+            else:
+                effective_prompt = f"Previously: {context_str}. Now:"
+        else:
+            effective_prompt = text_prompt.strip()
+
+        if effective_prompt:
             inputs = self.processor(
-                images=pil_image, text=text_prompt.strip(), return_tensors="pt"
+                images=pil_image, text=effective_prompt, return_tensors="pt"
             )
         else:
             inputs = self.processor(images=pil_image, return_tensors="pt")
@@ -246,6 +272,8 @@ class VideoCaptioner:
         max_frames: int = 30,
         progress_callback=None,
         text_prompt: str = "",
+        use_temporal_context: bool = False,
+        context_window: int = 2,
     ) -> dict:
         """
         Run the complete video-captioning pipeline.
@@ -262,20 +290,31 @@ class VideoCaptioner:
             ``callback(current_frame: int, total_frames: int)``
             invoked after each frame is captioned.
         text_prompt : str, optional
-            If provided, BLIP uses conditional (prompt-guided) generation.
-            E.g. ``"a medical image showing"`` for medical videos.
+            Base prompt for conditional generation (medical mode etc.).
+        use_temporal_context : bool
+            When True, enables both:
+            - **Option A** — each frame caption is conditioned on the
+              previous ``context_window`` captions (prompt-based context).
+            - **Option B** — final aggregation uses semantic dedup (SBERT)
+              + T5 summarisation instead of simple connector-join.
+        context_window : int
+            Number of previous captions to include in the context prompt
+            (only used when ``use_temporal_context=True``).
 
         Returns
         -------
         dict with keys:
-            frames          – list of BGR numpy arrays
-            frame_images    – list of PIL RGB images (for display)
-            captions        – list[str], one per frame
-            unique_captions – list[str], consecutive duplicates removed
-            unique_indices  – list[int], frame indices of unique captions
-            aggregated_caption – str, temporal paragraph
-            video_fps       – float, original video FPS
-            total_video_frames – int, source video frame count
+            frames                  – list of BGR numpy arrays
+            frame_images            – list of PIL RGB images (for display)
+            captions                – list[str], one per frame
+            unique_captions         – list[str], consecutive duplicates removed
+            semantic_unique_captions – list[str], semantically deduped
+              (equals unique_captions when use_temporal_context=False)
+            unique_indices          – list[int], frame indices of unique captions
+            aggregated_caption      – str, final temporal paragraph
+            video_fps               – float, original video FPS
+            total_video_frames      – int, source video frame count
+            temporal_context_used   – bool, mirrors use_temporal_context flag
         """
         # 1. Extract frames
         frames, video_fps, total_video_frames = self.extract_frames(
@@ -285,12 +324,25 @@ class VideoCaptioner:
         if not frames:
             raise ValueError("No frames could be extracted from the video.")
 
-        # 2. Caption each frame
+        # Lazy-load TemporalFusion only when needed (avoids model download on
+        # every import)
+        temporal_fusion = None
+        if use_temporal_context:
+            from temporal_fusion import TemporalFusion
+            temporal_fusion = TemporalFusion()
+
+        # 2. Caption each frame (Option A: pass previous captions as context)
         captions: List[str] = []
         frame_images: List[Image.Image] = []
 
         for i, frame in enumerate(frames):
-            caption = self.caption_frame(frame, text_prompt=text_prompt)
+            prev = captions if use_temporal_context else None
+            caption = self.caption_frame(
+                frame,
+                text_prompt=text_prompt,
+                previous_captions=prev,
+                context_window=context_window,
+            )
             captions.append(caption)
 
             # Convert for display
@@ -302,15 +354,24 @@ class VideoCaptioner:
 
             logger.info(f"Frame {i + 1}/{len(frames)}: {caption}")
 
-        # 3. Remove consecutive duplicates
+        # 3. Remove consecutive exact duplicates (always done)
         unique_captions, unique_indices = self.remove_duplicate_captions(captions)
 
-        # 4. Aggregate into temporal paragraph
-        aggregated = self.aggregate_captions(unique_captions)
+        # 4. Aggregate
+        if use_temporal_context and temporal_fusion is not None:
+            # Option B: semantic dedup → T5 summarisation
+            semantic_unique = temporal_fusion.semantic_dedup(unique_captions)
+            aggregated = temporal_fusion.summarise(semantic_unique)
+        else:
+            # Original connector-join method
+            semantic_unique = unique_captions
+            aggregated = self.aggregate_captions(unique_captions)
 
         logger.info(
             f"Pipeline complete — {len(frames)} frames, "
-            f"{len(unique_captions)} unique captions"
+            f"{len(unique_captions)} exact-unique, "
+            f"{len(semantic_unique)} semantic-unique captions "
+            f"(temporal_context={use_temporal_context})"
         )
 
         return {
@@ -318,8 +379,10 @@ class VideoCaptioner:
             "frame_images": frame_images,
             "captions": captions,
             "unique_captions": unique_captions,
+            "semantic_unique_captions": semantic_unique,
             "unique_indices": unique_indices,
             "aggregated_caption": aggregated,
             "video_fps": video_fps,
             "total_video_frames": total_video_frames,
+            "temporal_context_used": use_temporal_context,
         }
