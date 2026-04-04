@@ -154,30 +154,20 @@ class VideoCaptioner:
         text_prompt : str, optional
             Base prompt for conditional generation (e.g. medical mode).
         previous_captions : list[str], optional
-            Last ``context_window`` captions from prior frames.
-            When provided, they are prepended as temporal context so BLIP
-            generates a caption that is consistent with what came before.
-            Example prompt sent to BLIP::
-                "Previously: a dog runs. a ball is thrown. Now:"
+            Accepted for API compatibility but not used for prompting.
+            BLIP encodes prompts into token IDs and decodes them back
+            verbatim, causing the context string to appear literally in
+            every output caption. Temporal coherence is instead achieved
+            in post-processing via TemporalFusion (Option B).
         context_window : int
-            How many previous captions to include in the context prompt.
+            Accepted for API compatibility (unused here).
         """
         # OpenCV → PIL RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
 
-        # ── Build the effective prompt ─────────────────────────────
-        # Option A: prepend previous captions as temporal context
-        if previous_captions:
-            recent = previous_captions[-context_window:]
-            context_str = " ".join(c.strip().rstrip(".") for c in recent)
-            if text_prompt.strip():
-                # medical mode + temporal context
-                effective_prompt = f"Previously: {context_str}. {text_prompt.strip()}"
-            else:
-                effective_prompt = f"Previously: {context_str}. Now:"
-        else:
-            effective_prompt = text_prompt.strip()
+        # Use the base text_prompt only (no temporal context injection)
+        effective_prompt = text_prompt.strip()
 
         if effective_prompt:
             inputs = self.processor(
@@ -194,8 +184,16 @@ class VideoCaptioner:
         with torch.no_grad():
             output = self.model.generate(**inputs, max_new_tokens=50)
 
-        caption = self.processor.decode(output[0], skip_special_tokens=True)
-        return caption.strip()
+        caption = self.processor.decode(output[0], skip_special_tokens=True).strip()
+
+        # For conditional generation BLIP echoes the prompt prefix — strip it.
+        if effective_prompt:
+            prompt_lower = effective_prompt.lower().strip()
+            caption_lower = caption.lower()
+            if caption_lower.startswith(prompt_lower):
+                caption = caption[len(effective_prompt):].strip().lstrip(":").strip()
+
+        return caption
 
     # ── Duplicate removal ─────────────────────────────────────────
 
@@ -331,17 +329,16 @@ class VideoCaptioner:
             from temporal_fusion import TemporalFusion
             temporal_fusion = TemporalFusion()
 
-        # 2. Caption each frame (Option A: pass previous captions as context)
+        # 2. Caption each frame — clean, unconditional per-frame captions.
+        # Temporal coherence is handled entirely in post-processing (Option B)
+        # via TemporalFusion: SBERT semantic dedup + T5 summarisation.
         captions: List[str] = []
         frame_images: List[Image.Image] = []
 
         for i, frame in enumerate(frames):
-            prev = captions if use_temporal_context else None
             caption = self.caption_frame(
                 frame,
                 text_prompt=text_prompt,
-                previous_captions=prev,
-                context_window=context_window,
             )
             captions.append(caption)
 
