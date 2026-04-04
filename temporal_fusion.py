@@ -86,7 +86,7 @@ class TemporalFusion:
         self,
         sbert_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         summarizer_model: str = "t5-small",
-        dedup_threshold: float = 0.75,
+        dedup_threshold: float = 0.85,
         max_summary_tokens: int = 80,
         min_summary_tokens: int = 1,
     ):
@@ -164,8 +164,9 @@ class TemporalFusion:
                     unique.append(cap)
             return unique
 
-        # SBERT path — compare each caption to the *last kept* caption
-        # (not just the previous one) so clusters of near-duplicates all collapse
+        # SBERT path — compare each caption against ALL already-kept captions.
+        # Comparing only against the last kept caption misses scenes that
+        # re-appear later in the video (e.g. same shot at 0:10 and 0:45).
         try:
             from sentence_transformers import util
             embeddings = self._sbert.encode(captions, convert_to_tensor=True)
@@ -173,14 +174,15 @@ class TemporalFusion:
             unique_embeds = [embeddings[0]]
 
             for i in range(1, len(captions)):
-                # Compare against the last *kept* embedding
-                sim = util.cos_sim(embeddings[i], unique_embeds[-1]).item()
-                if sim < self.dedup_threshold:
+                # Similarity against every already-kept caption
+                sims = [util.cos_sim(embeddings[i], kept).item() for kept in unique_embeds]
+                max_sim = max(sims)
+                if max_sim < self.dedup_threshold:
                     unique.append(captions[i])
                     unique_embeds.append(embeddings[i])
                 else:
                     logger.debug(
-                        f"Dropped near-duplicate (sim={sim:.2f}): '{captions[i]}'"
+                        f"Dropped near-duplicate (max_sim={max_sim:.2f}): '{captions[i]}'"
                     )
             logger.info(
                 f"Semantic dedup: {len(captions)} → {len(unique)} captions "

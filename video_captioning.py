@@ -227,15 +227,26 @@ class VideoCaptioner:
     # ── Temporal aggregation ──────────────────────────────────────
 
     @staticmethod
-    def aggregate_captions(unique_captions: List[str]) -> str:
+    def aggregate_captions(unique_captions: List[str], max_events: int = 8) -> str:
         """
         Stitch unique captions into a coherent temporal paragraph using
         connectors like "Initially", "Then", "After that", "Finally".
+
+        If more than ``max_events`` captions remain after dedup, evenly
+        samples ``max_events`` key moments so the paragraph stays readable.
         """
         if not unique_captions:
             return ""
         if len(unique_captions) == 1:
             return unique_captions[0].capitalize()
+
+        # If too many captions remain, sample evenly spaced key moments
+        if len(unique_captions) > max_events:
+            indices = [
+                int(round(i * (len(unique_captions) - 1) / (max_events - 1)))
+                for i in range(max_events)
+            ]
+            unique_captions = [unique_captions[i] for i in indices]
 
         parts: List[str] = []
         n = len(unique_captions)
@@ -334,8 +345,20 @@ class VideoCaptioner:
         # via TemporalFusion: SBERT semantic dedup + T5 summarisation.
         captions: List[str] = []
         frame_images: List[Image.Image] = []
+        skipped_black = 0
 
         for i, frame in enumerate(frames):
+            # Skip pure-black frames (title cards, fade-in/out, intro screens).
+            # A frame whose mean grayscale brightness is below 15 (out of 255)
+            # is essentially black and will only produce "a black background" captions.
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if gray.mean() < 15:
+                skipped_black += 1
+                logger.debug(f"Frame {i + 1}: skipped (black frame, mean={gray.mean():.1f})")
+                if progress_callback is not None:
+                    progress_callback(i + 1, len(frames))
+                continue
+
             caption = self.caption_frame(
                 frame,
                 text_prompt=text_prompt,
@@ -351,18 +374,28 @@ class VideoCaptioner:
 
             logger.info(f"Frame {i + 1}/{len(frames)}: {caption}")
 
+        if skipped_black:
+            logger.info(f"Skipped {skipped_black} black/near-black frames.")
+
         # 3. Remove consecutive exact duplicates (always done)
         unique_captions, unique_indices = self.remove_duplicate_captions(captions)
 
         # 4. Aggregate
-        if use_temporal_context and temporal_fusion is not None:
-            # Option B: semantic dedup → T5 summarisation
-            semantic_unique = temporal_fusion.semantic_dedup(unique_captions)
+        # Always lazy-load TemporalFusion for SBERT dedup — it prevents the
+        # "29 near-identical sentences" problem in non-temporal mode too.
+        # The difference between modes is only in the final summarisation step.
+        if temporal_fusion is None:
+            from temporal_fusion import TemporalFusion
+            temporal_fusion = TemporalFusion()
+
+        semantic_unique = temporal_fusion.semantic_dedup(unique_captions)
+
+        if use_temporal_context:
+            # Temporal mode: T5 summary (falls back to connector-join for short inputs)
             aggregated = temporal_fusion.summarise(semantic_unique)
         else:
-            # Original connector-join method
-            semantic_unique = unique_captions
-            aggregated = self.aggregate_captions(unique_captions)
+            # Non-temporal mode: clean connector-join on the deduped set
+            aggregated = self.aggregate_captions(semantic_unique)
 
         logger.info(
             f"Pipeline complete — {len(frames)} frames, "
