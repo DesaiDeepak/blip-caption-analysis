@@ -74,8 +74,12 @@ class TemporalFusion:
     summarizer_model : str
         HuggingFace model ID for the summarisation model.
     dedup_threshold : float
-        Cosine-similarity threshold above which two consecutive captions
-        are considered duplicates (default 0.85).
+        Cosine-similarity threshold above which two captions within the
+        sliding window are considered duplicates (default 0.85).
+    dedup_window : int
+        How many of the most-recently kept captions to compare against.
+        A window of 5 prevents over-collapsing on long videos while still
+        removing repeated consecutive shots (default 5).
     max_summary_tokens : int
         Maximum tokens the summariser may generate (default 80).
     min_summary_tokens : int
@@ -87,12 +91,14 @@ class TemporalFusion:
         sbert_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         summarizer_model: str = "t5-small",
         dedup_threshold: float = 0.85,
+        dedup_window: int = 5,
         max_summary_tokens: int = 80,
         min_summary_tokens: int = 1,
     ):
         self._sbert_model_name = sbert_model
         self._summarizer_model_name = summarizer_model
         self.dedup_threshold = dedup_threshold
+        self.dedup_window = dedup_window  # sliding window size for dedup
         self.max_summary_tokens = max_summary_tokens
         self.min_summary_tokens = min_summary_tokens
 
@@ -142,10 +148,12 @@ class TemporalFusion:
 
     def semantic_dedup(self, captions: List[str]) -> List[str]:
         """
-        Remove semantically near-duplicate *consecutive* captions.
+        Remove semantically near-duplicate captions using a sliding window.
 
-        Two adjacent captions are merged (the second is dropped) when their
-        cosine similarity exceeds ``self.dedup_threshold``.
+        Each caption is compared against the last ``dedup_window`` kept
+        captions (not all of them).  This prevents global collapse on long
+        videos where many nature/outdoor scenes share high cosine similarity,
+        while still dropping truly repetitive consecutive shots.
 
         Falls back to exact-string dedup if SBERT is unavailable.
         """
@@ -164,9 +172,9 @@ class TemporalFusion:
                     unique.append(cap)
             return unique
 
-        # SBERT path — compare each caption against ALL already-kept captions.
-        # Comparing only against the last kept caption misses scenes that
-        # re-appear later in the video (e.g. same shot at 0:10 and 0:45).
+        # SBERT path — sliding-window dedup.
+        # Compare each caption against only the last `dedup_window` kept
+        # captions so long videos don't over-collapse.
         try:
             from sentence_transformers import util
             embeddings = self._sbert.encode(captions, convert_to_tensor=True)
@@ -174,8 +182,9 @@ class TemporalFusion:
             unique_embeds = [embeddings[0]]
 
             for i in range(1, len(captions)):
-                # Similarity against every already-kept caption
-                sims = [util.cos_sim(embeddings[i], kept).item() for kept in unique_embeds]
+                # Only look at the most recent `dedup_window` kept embeddings
+                window = unique_embeds[-self.dedup_window:]
+                sims = [util.cos_sim(embeddings[i], kept).item() for kept in window]
                 max_sim = max(sims)
                 if max_sim < self.dedup_threshold:
                     unique.append(captions[i])
@@ -186,7 +195,7 @@ class TemporalFusion:
                     )
             logger.info(
                 f"Semantic dedup: {len(captions)} → {len(unique)} captions "
-                f"(threshold={self.dedup_threshold})"
+                f"(threshold={self.dedup_threshold}, window={self.dedup_window})"
             )
             return unique
         except Exception as exc:
