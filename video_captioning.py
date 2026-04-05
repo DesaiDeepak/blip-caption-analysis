@@ -154,20 +154,37 @@ class VideoCaptioner:
         text_prompt : str, optional
             Base prompt for conditional generation (e.g. medical mode).
         previous_captions : list[str], optional
-            Accepted for API compatibility but not used for prompting.
-            BLIP encodes prompts into token IDs and decodes them back
-            verbatim, causing the context string to appear literally in
-            every output caption. Temporal coherence is instead achieved
-            in post-processing via TemporalFusion (Option B).
+            When provided, the last ``context_window`` captions are
+            appended to the prompt as temporal context so the model is
+            aware of what happened in prior frames.  The context is
+            formatted as a short prefix (e.g.
+            ``"previously: a dog runs on grass. now"``) which guides
+            BLIP toward temporally coherent continuations without being
+            echoed verbatim in the output.
         context_window : int
-            Accepted for API compatibility (unused here).
+            Number of previous captions to include as context (default 2).
         """
         # OpenCV → PIL RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
 
-        # Use the base text_prompt only (no temporal context injection)
-        effective_prompt = text_prompt.strip()
+        # Build effective prompt — optionally inject temporal context
+        base_prompt = text_prompt.strip()
+
+        # Option A: prepend recent caption context so BLIP is aware of the
+        # temporal progression.  The "previously: … now" phrasing is short
+        # enough that BLIP does not echo it back, and it steers generation
+        # toward describing *changes* rather than repeating.
+        if previous_captions and context_window > 0:
+            recent = previous_captions[-context_window:]
+            context_str = ". ".join(c.strip().rstrip(".") for c in recent)
+            if base_prompt:
+                effective_prompt = f"previously: {context_str}. now {base_prompt}"
+            else:
+                effective_prompt = f"previously: {context_str}. now"
+            logger.debug(f"Temporal prompt: {effective_prompt[:120]}")
+        else:
+            effective_prompt = base_prompt
 
         if effective_prompt:
             inputs = self.processor(
@@ -187,11 +204,18 @@ class VideoCaptioner:
         caption = self.processor.decode(output[0], skip_special_tokens=True).strip()
 
         # For conditional generation BLIP echoes the prompt prefix — strip it.
+        # We need to strip the full effective_prompt (which may include context).
         if effective_prompt:
             prompt_lower = effective_prompt.lower().strip()
             caption_lower = caption.lower()
             if caption_lower.startswith(prompt_lower):
                 caption = caption[len(effective_prompt):].strip().lstrip(":").strip()
+            # Also try stripping just the base prompt (in case BLIP only
+            # echoes that part and not the "previously: …" prefix).
+            elif base_prompt:
+                bp_lower = base_prompt.lower().strip()
+                if caption_lower.startswith(bp_lower):
+                    caption = caption[len(base_prompt):].strip().lstrip(":").strip()
 
         return caption
 
@@ -340,12 +364,15 @@ class VideoCaptioner:
             from temporal_fusion import TemporalFusion
             temporal_fusion = TemporalFusion()
 
-        # 2. Caption each frame — clean, unconditional per-frame captions.
-        # Temporal coherence is handled entirely in post-processing (Option B)
-        # via TemporalFusion: SBERT semantic dedup + T5 summarisation.
+        # 2. Caption each frame.
+        # Option A (temporal context): when enabled, each frame's caption is
+        # conditioned on the previous `context_window` captions via prompt
+        # injection, so BLIP is aware of the temporal progression.
+        # Option B (post-processing): SBERT dedup + T5 summarisation in step 4.
         captions: List[str] = []
         frame_images: List[Image.Image] = []
         skipped_black = 0
+        skipped_lowinfo = 0
 
         for i, frame in enumerate(frames):
             # Skip pure-black frames (title cards, fade-in/out, intro screens).
@@ -359,9 +386,23 @@ class VideoCaptioner:
                     progress_callback(i + 1, len(frames))
                 continue
 
+            # Skip logo / title-card / solid-color frames.
+            # These have very low edge energy (Laplacian variance < 100)
+            # compared to real-world scenes which typically score 200+.
+            lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            if lap_var < 100:
+                skipped_lowinfo += 1
+                logger.debug(f"Frame {i + 1}: skipped (low detail, laplacian_var={lap_var:.0f})")
+                if progress_callback is not None:
+                    progress_callback(i + 1, len(frames))
+                continue
+
+            # Option A: pass recent captions as context when temporal mode is on
             caption = self.caption_frame(
                 frame,
                 text_prompt=text_prompt,
+                previous_captions=captions if use_temporal_context else None,
+                context_window=context_window,
             )
             captions.append(caption)
 
@@ -374,28 +415,30 @@ class VideoCaptioner:
 
             logger.info(f"Frame {i + 1}/{len(frames)}: {caption}")
 
-        if skipped_black:
-            logger.info(f"Skipped {skipped_black} black/near-black frames.")
+        if skipped_black or skipped_lowinfo:
+            logger.info(
+                f"Skipped frames — black: {skipped_black}, "
+                f"low-detail (logos/titles): {skipped_lowinfo}"
+            )
 
         # 3. Remove consecutive exact duplicates (always done)
         unique_captions, unique_indices = self.remove_duplicate_captions(captions)
 
         # 4. Aggregate
-        # Always lazy-load TemporalFusion for SBERT dedup — it prevents the
-        # "29 near-identical sentences" problem in non-temporal mode too.
-        # The difference between modes is only in the final summarisation step.
+        # Lazy-load TemporalFusion with mode-specific dedup threshold:
+        #   • Temporal ON  → threshold=0.75  (tighter: fewer, cleaner key events)
+        #   • Temporal OFF → threshold=0.85  (looser: preserves more scene variety)
         if temporal_fusion is None:
             from temporal_fusion import TemporalFusion
-            temporal_fusion = TemporalFusion()
+            dedup_threshold = 0.75 if use_temporal_context else 0.85
+            temporal_fusion = TemporalFusion(dedup_threshold=dedup_threshold)
 
         semantic_unique = temporal_fusion.semantic_dedup(unique_captions)
 
-        if use_temporal_context:
-            # Temporal mode: T5 summary (falls back to connector-join for short inputs)
-            aggregated = temporal_fusion.summarise(semantic_unique)
-        else:
-            # Non-temporal mode: clean connector-join on the deduped set
-            aggregated = self.aggregate_captions(semantic_unique)
+        # Both modes use connector-join for aggregation.
+        # T5 summarisation was removed because it over-condensed 11 captions
+        # into only 2-3 sentences, losing important scene detail.
+        aggregated = self.aggregate_captions(semantic_unique)
 
         logger.info(
             f"Pipeline complete — {len(frames)} frames, "
