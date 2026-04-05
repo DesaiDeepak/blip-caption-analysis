@@ -142,8 +142,6 @@ class VideoCaptioner:
         self,
         frame_bgr: np.ndarray,
         text_prompt: str = "",
-        previous_captions: Optional[List[str]] = None,
-        context_window: int = 2,
     ) -> str:
         """Generate a BLIP caption for a single BGR (OpenCV) frame.
 
@@ -153,38 +151,20 @@ class VideoCaptioner:
             BGR frame from OpenCV.
         text_prompt : str, optional
             Base prompt for conditional generation (e.g. medical mode).
-        previous_captions : list[str], optional
-            When provided, the last ``context_window`` captions are
-            appended to the prompt as temporal context so the model is
-            aware of what happened in prior frames.  The context is
-            formatted as a short prefix (e.g.
-            ``"previously: a dog runs on grass. now"``) which guides
-            BLIP toward temporally coherent continuations without being
-            echoed verbatim in the output.
-        context_window : int
-            Number of previous captions to include as context (default 2).
+
+        Notes
+        -----
+        Temporal context (awareness of previous captions) is handled
+        exclusively in the *post-processing* step via SBERT semantic
+        dedup + connector-join aggregation.  Injecting prior captions
+        into the BLIP prompt causes exponential echo/growth and is
+        therefore **not** done here.
         """
         # OpenCV → PIL RGB
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
 
-        # Build effective prompt — optionally inject temporal context
-        base_prompt = text_prompt.strip()
-
-        # Option A: prepend recent caption context so BLIP is aware of the
-        # temporal progression.  The "previously: … now" phrasing is short
-        # enough that BLIP does not echo it back, and it steers generation
-        # toward describing *changes* rather than repeating.
-        if previous_captions and context_window > 0:
-            recent = previous_captions[-context_window:]
-            context_str = ". ".join(c.strip().rstrip(".") for c in recent)
-            if base_prompt:
-                effective_prompt = f"previously: {context_str}. now {base_prompt}"
-            else:
-                effective_prompt = f"previously: {context_str}. now"
-            logger.debug(f"Temporal prompt: {effective_prompt[:120]}")
-        else:
-            effective_prompt = base_prompt
+        effective_prompt = text_prompt.strip()
 
         if effective_prompt:
             inputs = self.processor(
@@ -204,18 +184,11 @@ class VideoCaptioner:
         caption = self.processor.decode(output[0], skip_special_tokens=True).strip()
 
         # For conditional generation BLIP echoes the prompt prefix — strip it.
-        # We need to strip the full effective_prompt (which may include context).
         if effective_prompt:
             prompt_lower = effective_prompt.lower().strip()
             caption_lower = caption.lower()
             if caption_lower.startswith(prompt_lower):
                 caption = caption[len(effective_prompt):].strip().lstrip(":").strip()
-            # Also try stripping just the base prompt (in case BLIP only
-            # echoes that part and not the "previously: …" prefix).
-            elif base_prompt:
-                bp_lower = base_prompt.lower().strip()
-                if caption_lower.startswith(bp_lower):
-                    caption = caption[len(base_prompt):].strip().lstrip(":").strip()
 
         return caption
 
@@ -306,7 +279,6 @@ class VideoCaptioner:
         progress_callback=None,
         text_prompt: str = "",
         use_temporal_context: bool = False,
-        context_window: int = 2,
     ) -> dict:
         """
         Run the complete video-captioning pipeline.
@@ -325,14 +297,10 @@ class VideoCaptioner:
         text_prompt : str, optional
             Base prompt for conditional generation (medical mode etc.).
         use_temporal_context : bool
-            When True, enables both:
-            - **Option A** — each frame caption is conditioned on the
-              previous ``context_window`` captions (prompt-based context).
-            - **Option B** — final aggregation uses semantic dedup (SBERT)
-              + T5 summarisation instead of simple connector-join.
-        context_window : int
-            Number of previous captions to include in the context prompt
-            (only used when ``use_temporal_context=True``).
+            When True, enables tighter semantic dedup (threshold=0.75)
+            producing fewer, cleaner key-event sentences.  When False,
+            a looser threshold (0.85) keeps more scene variety.
+            Both modes use SBERT dedup + connector-join aggregation.
 
         Returns
         -------
@@ -358,17 +326,13 @@ class VideoCaptioner:
             raise ValueError("No frames could be extracted from the video.")
 
         # Lazy-load TemporalFusion only when needed (avoids model download on
-        # every import)
+        # every import).  Note: temporal_fusion is also loaded for non-temporal
+        # mode below (step 4) for SBERT dedup.
         temporal_fusion = None
-        if use_temporal_context:
-            from temporal_fusion import TemporalFusion
-            temporal_fusion = TemporalFusion()
 
-        # 2. Caption each frame.
-        # Option A (temporal context): when enabled, each frame's caption is
-        # conditioned on the previous `context_window` captions via prompt
-        # injection, so BLIP is aware of the temporal progression.
-        # Option B (post-processing): SBERT dedup + T5 summarisation in step 4.
+        # 2. Caption each frame (unconditional — no prompt injection).
+        # Temporal awareness is handled in step 4 via SBERT dedup, not
+        # by feeding prior captions into the BLIP prompt.
         captions: List[str] = []
         frame_images: List[Image.Image] = []
         skipped_black = 0
@@ -397,12 +361,9 @@ class VideoCaptioner:
                     progress_callback(i + 1, len(frames))
                 continue
 
-            # Option A: pass recent captions as context when temporal mode is on
             caption = self.caption_frame(
                 frame,
                 text_prompt=text_prompt,
-                previous_captions=captions if use_temporal_context else None,
-                context_window=context_window,
             )
             captions.append(caption)
 
