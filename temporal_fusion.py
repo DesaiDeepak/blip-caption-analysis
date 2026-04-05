@@ -92,8 +92,8 @@ class TemporalFusion:
         summarizer_model: str = "t5-small",
         dedup_threshold: float = 0.85,
         dedup_window: int = 5,
-        max_summary_tokens: int = 80,
-        min_summary_tokens: int = 1,
+        max_summary_tokens: int = 120,
+        min_summary_tokens: int = 20,
     ):
         self._sbert_model_name = sbert_model
         self._summarizer_model_name = summarizer_model
@@ -224,7 +224,7 @@ class TemporalFusion:
 
         # T5 needs enough input tokens to summarise — short inputs get connector-join
         word_count = len(joined.split())
-        if self._summarizer_failed or self._summarizer is None or word_count < 30:
+        if self._summarizer_failed or self._summarizer is None or word_count < 15:
             logger.info("Using connector-join (summariser unavailable or input too short).")
             return _connector_join(captions)
 
@@ -233,8 +233,16 @@ class TemporalFusion:
             tokenizer = self._summarizer["tokenizer"]
             torch = self._summarizer["torch"]
 
-            # T5 requires the "summarize: " task prefix
-            t5_input = f"summarize: {joined}"
+            # T5 requires a task prefix.  We use a temporally-aware prompt
+            # so the model preserves the chronological progression of events
+            # instead of producing a generic one-line summary.
+            numbered = " ".join(
+                f"({i+1}) {c.strip().rstrip('.')}." for i, c in enumerate(captions)
+            )
+            t5_input = (
+                "summarize the following sequence of video frame descriptions "
+                "into a coherent temporal paragraph: " + numbered
+            )
             inputs = tokenizer(
                 t5_input, return_tensors="pt", truncation=True, max_length=512
             )
