@@ -43,8 +43,10 @@ if not os.path.exists(os.path.join(MODEL_DIR, "config.json")):
 st.title("BLIP Captioning App")
 st.write("Upload an image or video, and I'll generate captions!")
 
-# ── Tabs: Image Captioning | Video Captioning ────────────────────
-tab_image, tab_video = st.tabs(["🖼️ Image Captioning", "🎬 Video Captioning"])
+# ── Tabs: Image Captioning | Video Captioning | Live Captioning ──
+tab_image, tab_video, tab_live = st.tabs(
+    ["🖼️ Image Captioning", "🎬 Video Captioning", "📹 Live Captioning"]
+)
 
 # ══════════════════════════════════════════════════════════════════
 #  TAB 1 — IMAGE CAPTIONING  (original pipeline, untouched logic)
@@ -167,12 +169,10 @@ with tab_video:
             "🕐 Temporal Context Mode",
             value=False,
             help=(
-                "Improves caption coherence across frames:\n\n"
-                "**Option A** — each frame is captioned with awareness of "
-                "the previous 2 captions (prompt-based context).\n\n"
-                "**Option B** — final summary uses semantic deduplication "
-                "(SBERT) + T5 summarisation instead of simple joining.\n\n"
-                "⚠️ First run downloads ~100 MB of models."
+                "Enables tighter semantic deduplication (SBERT) so the "
+                "final summary keeps only the most distinct scene changes, "
+                "producing a cleaner, more focused temporal narrative.\n\n"
+                "⚠️ First run downloads ~80 MB of SBERT model."
             ),
         )
 
@@ -299,3 +299,209 @@ with tab_video:
                     os.unlink(tmp_path)
     else:
         st.write("Please upload a video file to get started.")
+
+# ══════════════════════════════════════════════════════════════════
+#  TAB 3 — LIVE CAPTIONING  (webcam / screen capture)
+# ══════════════════════════════════════════════════════════════════
+with tab_live:
+    st.header("Live Captioning")
+    st.write(
+        "Capture frames from your webcam and see BLIP captions "
+        "update in near-real-time.  Captions are semantically "
+        "deduplicated so repeated scenes don't clutter the output."
+    )
+
+    # ── Controls ──────────────────────────────────────────────────
+    live_col_ctrl, live_col_main = st.columns([1, 3])
+
+    with live_col_ctrl:
+        st.subheader("⚙️ Settings")
+        caption_interval = st.slider(
+            "Caption every N seconds",
+            min_value=1,
+            max_value=5,
+            value=2,
+            step=1,
+            help="How often to generate a new caption from the webcam feed.",
+        )
+        max_history = st.slider(
+            "Caption history size",
+            min_value=5,
+            max_value=30,
+            value=15,
+            step=5,
+            help="Maximum number of captions to keep in the live feed.",
+        )
+        live_medical_mode = st.checkbox(
+            "🩺 Medical Mode",
+            value=False,
+            help="Use prompt-guided captioning for medical imagery.",
+            key="live_medical",
+        )
+
+    # ── Initialise session state for live captioning ──────────────
+    if "live_running" not in st.session_state:
+        st.session_state.live_running = False
+    if "live_captions" not in st.session_state:
+        st.session_state.live_captions = []
+
+    with live_col_main:
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        with btn_col1:
+            start_btn = st.button("▶️ Start Live Captioning", type="primary")
+        with btn_col2:
+            stop_btn = st.button("⏹️ Stop")
+        with btn_col3:
+            clear_btn = st.button("🗑️ Clear History")
+
+    if clear_btn:
+        st.session_state.live_captions = []
+        st.rerun()
+
+    if stop_btn:
+        st.session_state.live_running = False
+        st.rerun()
+
+    if start_btn:
+        st.session_state.live_running = True
+
+        # Lazy-load the captioner (reuse from video tab if available)
+        if "video_captioner" not in st.session_state:
+            with st.spinner("Loading BLIP model…"):
+                from video_captioning import VideoCaptioner
+                st.session_state.video_captioner = VideoCaptioner(
+                    model_dir=MODEL_DIR
+                )
+        captioner = st.session_state.video_captioner
+
+        # Lazy-load SBERT for live dedup
+        if "live_tf" not in st.session_state:
+            with st.spinner("Loading SBERT for dedup…"):
+                from temporal_fusion import TemporalFusion
+                st.session_state.live_tf = TemporalFusion(dedup_threshold=0.80)
+                st.session_state.live_tf._load_sbert()  # eagerly load
+
+        tf = st.session_state.live_tf
+
+        import cv2
+        import time
+        import numpy as np
+
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            st.error(
+                "❌ Could not open webcam. Please check that:\n"
+                "- Your browser has granted camera permissions\n"
+                "- No other application is using the camera\n"
+                "- You are running Streamlit locally (not via remote SSH)"
+            )
+            st.session_state.live_running = False
+        else:
+            st.success("📹 Webcam connected — generating captions…")
+
+            # Layout: live frame on left, caption feed on right
+            frame_placeholder = st.empty()
+            caption_placeholder = st.empty()
+            status_placeholder = st.empty()
+
+            text_prompt = "a medical image showing" if live_medical_mode else ""
+            last_caption_time = 0
+
+            try:
+                while st.session_state.live_running:
+                    ret, frame = cap.read()
+                    if not ret:
+                        st.warning("⚠️ Lost webcam feed.")
+                        break
+
+                    # Show the live frame
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_placeholder.image(
+                        frame_rgb, caption="Live Feed", width=480
+                    )
+
+                    # Caption at the configured interval
+                    now = time.time()
+                    if now - last_caption_time >= caption_interval:
+                        # Skip dark frames
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        if gray.mean() < 15:
+                            status_placeholder.caption("⏭️ Skipped dark frame")
+                            last_caption_time = now
+                            continue
+
+                        with status_placeholder:
+                            st.caption("🔄 Generating caption…")
+
+                        caption = captioner.caption_frame(
+                            frame, text_prompt=text_prompt
+                        )
+
+                        # SBERT dedup against recent captions
+                        recent = st.session_state.live_captions[-5:]
+                        is_duplicate = False
+                        if recent and tf._sbert is not None:
+                            try:
+                                from sentence_transformers import util
+                                new_emb = tf._sbert.encode(
+                                    caption, convert_to_tensor=True
+                                )
+                                for prev in recent:
+                                    prev_emb = tf._sbert.encode(
+                                        prev, convert_to_tensor=True
+                                    )
+                                    sim = util.cos_sim(new_emb, prev_emb).item()
+                                    if sim >= 0.80:
+                                        is_duplicate = True
+                                        break
+                            except Exception:
+                                pass
+
+                        if not is_duplicate:
+                            st.session_state.live_captions.append(caption)
+                            # Trim to max_history
+                            if len(st.session_state.live_captions) > max_history:
+                                st.session_state.live_captions = (
+                                    st.session_state.live_captions[-max_history:]
+                                )
+
+                        last_caption_time = now
+
+                        # Update the caption feed
+                        with caption_placeholder.container():
+                            st.subheader(
+                                f"📝 Live Captions "
+                                f"({len(st.session_state.live_captions)})"
+                            )
+                            # Show latest caption prominently
+                            if st.session_state.live_captions:
+                                st.markdown(
+                                    f"**Latest:** {st.session_state.live_captions[-1]}"
+                                )
+                            # Show history
+                            for i, c in enumerate(
+                                reversed(st.session_state.live_captions[:-1]), 1
+                            ):
+                                st.caption(f"{i}. {c}")
+
+                        status_placeholder.caption(
+                            f"✅ Caption generated"
+                            + (" (duplicate skipped)" if is_duplicate else "")
+                        )
+
+                    # Small sleep to avoid busy-looping
+                    time.sleep(0.1)
+
+            except Exception as exc:
+                st.error(f"Live captioning error: {exc}")
+            finally:
+                cap.release()
+                st.session_state.live_running = False
+
+    # Show existing caption history even when not running
+    elif st.session_state.live_captions:
+        st.subheader(
+            f"📝 Caption History ({len(st.session_state.live_captions)})"
+        )
+        for i, c in enumerate(st.session_state.live_captions, 1):
+            st.caption(f"{i}. {c}")
