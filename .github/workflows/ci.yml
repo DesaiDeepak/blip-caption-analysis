@@ -1,0 +1,87 @@
+name: CI - Start services & smoke tests
+
+on:
+  push:
+    branches: [ main, feature/live-captioning ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Create virtualenv and install requirements
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else echo 'requirements.txt not found'; fi
+
+      - name: Start uvicorn and streamlit (background)
+        run: |
+          source .venv/bin/activate
+          # start uvicorn and streamlit in background and capture logs
+          nohup .venv/bin/uvicorn api.inference:app --port 8000 > uvicorn.log 2>&1 &
+          nohup .venv/bin/streamlit run app.py --server.port 8501 > streamlit.log 2>&1 &
+          # give services a few seconds to start
+          sleep 6
+
+      - name: Wait for services and run smoke checks
+        run: |
+          set -e
+          # wait until both endpoints respond (up to ~60s)
+          for i in {1..30}; do
+            if curl -sS http://localhost:8000/ >/dev/null 2>&1 && curl -sS http://localhost:8501/ >/dev/null 2>&1; then
+              echo "Both services responded"
+              break
+            fi
+            echo "Waiting for services... ($i)"
+            sleep 2
+          done
+
+          echo "Running basic endpoint checks"
+          if ! curl -sS --fail http://localhost:8000/; then
+            echo "uvicorn did not respond; dumping uvicorn.log"
+            cat uvicorn.log || true
+            exit 1
+          fi
+          if ! curl -sS --fail http://localhost:8501/; then
+            echo "streamlit did not respond; dumping streamlit.log"
+            cat streamlit.log || true
+            exit 1
+          fi
+
+      - name: Run test suite (if present)
+        run: |
+          source .venv/bin/activate
+          if command -v pytest >/dev/null 2>&1; then
+            pytest -q || (echo 'pytest failed' && exit 1)
+          else
+            echo 'pytest not installed or no tests to run'
+          fi
+
+      - name: Upload service logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-logs
+          path: |
+            uvicorn.log
+            streamlit.log
