@@ -46,9 +46,10 @@ jobs:
       - name: Wait for services and run smoke checks
         run: |
           set -e
-          # wait until both endpoints respond (up to ~60s)
-          for i in {1..30}; do
-            if curl -sS http://localhost:8000/ >/dev/null 2>&1 && curl -sS http://localhost:8501/ >/dev/null 2>&1; then
+          # wait until both endpoints respond (up to ~90s)
+          for i in {1..45}; do
+            # check API health (returns 200) and Streamlit root
+            if curl -sS --fail http://localhost:8000/health >/dev/null 2>&1 && curl -sS http://localhost:8501/ >/dev/null 2>&1; then
               echo "Both services responded"
               break
             fi
@@ -57,8 +58,9 @@ jobs:
           done
 
           echo "Running basic endpoint checks"
-          if ! curl -sS --fail http://localhost:8000/; then
-            echo "uvicorn did not respond; dumping uvicorn.log"
+          # API exposes /health which returns 200 even if model isn't loaded yet
+          if ! curl -sS --fail http://localhost:8000/health; then
+            echo "uvicorn did not respond on /health; dumping uvicorn.log"
             cat uvicorn.log || true
             exit 1
           fi
