@@ -17,3 +17,7 @@ streamlit-webrtc>=0.47
 
 # Add uvicorn so the CI can start the API process
 uvicorn[standard]==0.22.0
+
+# FastAPI (required by api/inference.py) and multipart support for file uploads
+fastapi==0.95.2
+python-multipart==0.0.6
