@@ -14,3 +14,6 @@ pandas>=1.5,<2.0
 opencv-python-headless>=4.8,<4.11
 sentence-transformers>=2.7,<6.0
 streamlit-webrtc>=0.47
+
+# Add uvicorn so the CI can start the API process
+uvicorn[standard]==0.22.0
